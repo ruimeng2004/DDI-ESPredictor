@@ -302,7 +302,7 @@ if __name__ == "__main__":
     actual_dim = X.shape[2]
     assert actual_dim == expected_dim, \
         f"Feature dim mismatch: expected {expected_dim}, got {actual_dim}. " \
-        f"args.feature={args.feature}. 请检查 process_dataset 输出维度与 feature_config 是否一致。"
+        f"args.feature={args.feature}. please check process_dataset output_dim and feature_config output_dim。"
 
 
     model = DrugInteractionModel(

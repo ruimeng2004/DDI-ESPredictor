@@ -155,7 +155,6 @@ def evaluate_model(model, test_loader, device, num_classes=3):
         'auprc_weighted': average_precision_score(true_labels, all_probs.numpy(), average='weighted'),
     }
 
-    #需要把这部分ROC改动
     try:
         roc_auc_scores = []
         for i in range(num_classes):
@@ -236,7 +235,7 @@ def run_5fold_cv(X, Y, feature_type, device, epochs=100):
 
 # ===================== Main =====================
 if __name__ == "__main__":
-    print(f"当前使用的设备: {'GPU' if torch.cuda.is_available() else 'CPU'} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
+    print(f"device: {'GPU' if torch.cuda.is_available() else 'CPU'} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
     args = get_args()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
@@ -278,12 +277,37 @@ if __name__ == "__main__":
     print("\n=== Training Final Model on Entire Dataset ===")
     train_loader = DataLoader(TensorDataset(X, Y), batch_size=32, shuffle=True)
     
-    feature_config = {
-        '1D': {'dim': 128, 'start': 0},
-        '2D': {'dim': 128, 'start': 128},
-        '3D': {'dim': 128, 'start': 256},
-        'bert': {'dim': 300, 'start': 384}
+    dims_map = {
+        "bert": 300,
+        "fingerprint": 512,  
+        "3D": 128,
+        "2D": 128,
+        "1D": 128,
+        "multi": 128 * 3 + 300, 
+        "1D+2D": 128*2,
+        "1D+3D": 128*2,
+        "1D+bert": 128+300,
+        "2D+3D": 128*2,
+        "2D+bert": 128+300,
+        "3D+bert": 128+300,
+        "1D+2D+3D": 128*3,
+        "1D+2D+bert": 128*2+300,
+        "1D+3D+bert": 128*2+300,
+        "2D+3D+bert": 128*2+300
     }
+
+    def build_feature_config(feature: str) -> dict:
+        if feature == "multi":
+            return {
+                '1D':   {'dim': 128, 'start': 0},
+                '2D':   {'dim': 128, 'start': 128},
+                '3D':   {'dim': 128, 'start': 256},
+                'bert': {'dim': 300, 'start': 384}
+            }
+        else:
+            return {feature: {'dim': dims_map[feature], 'start': 0}}
+    
+    feature_config = build_feature_config(args.feature)
 
     model = DrugInteractionModel(
         feature_config=feature_config,

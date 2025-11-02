@@ -6,24 +6,21 @@ import traceback
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from Suplement.FE.FE_BERT.FE_Bert import gnnsmile
-from Suplement.FE.FE_3Ds.preprocess import smiles_to_data, prepare_batch
-from Suplement.FE.FE_3Ds.pretrain_MolMVC import EmbeddingModel
+from Suplement.FE.FE_3D.preprocess import smiles_to_data, prepare_batch
+from Suplement.FE.FE_3D.pretrain_MolMVC import EmbeddingModel
 
 def process_dataset(train_data, feature_type, device, save_dir="extracted_features"):
     os.makedirs(save_dir, exist_ok=True)
 
-    # ==== 规范化 feature_type，支持大小写/加号组合 ====
     raw_spec = str(feature_type).strip()
     norm_spec = raw_spec.replace("BERT", "bert").replace("Bert", "bert").replace(" ", "")
     is_combo = ("+" in norm_spec)
-    # 允许的视图名（与下方实现一致）
     ALLOWED = {"1D", "2D", "3D", "bert", "fingerprint"}
 
     if norm_spec.lower() == "multi":
         views_in_order = ["1D", "2D", "3D", "bert"]
     elif is_combo:
-        parts = [p for p in norm_spec.split("+") if p]  # 保持用户给定顺序
-        # 统一大小写：1D/2D/3D 保持，bert 已经小写
+        parts = [p for p in norm_spec.split("+") if p]  
         views_in_order = []
         for p in parts:
             key = p if p in {"1D", "2D", "3D"} else p.lower()
@@ -35,7 +32,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
         if not views_in_order:
             raise ValueError(f"Empty/invalid combo in feature_type: {feature_type}")
     else:
-        # 单视图
         key = norm_spec if norm_spec in {"1D", "2D", "3D"} else norm_spec.lower()
         if key not in ALLOWED and key != "multi":
             raise ValueError(f"Unknown feature type: {feature_type}")
@@ -76,14 +72,9 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
             smiles = train_data.iloc[index][smiles_col]
             print(f"Drug name: {drug_name}, SMILES: {smiles}")
 
-            # ===== 指定提取哪些模块 =====
             need_bert = ("bert" in views_in_order)
             need_molmvc = any(v in views_in_order for v in ["1D", "2D", "3D"])
-
-            # ====== 准备容器 ======
             vecs_to_concat = []
-
-            # ====== 先做 MolMVC（如需要 1D/2D/3D 中任意一项）======
             emb_1d = None
             emb_2d = None
             emb_3d = None
@@ -128,23 +119,21 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
                     removelist.append(drug_id)
                     continue
 
-                # 平均 1D
                 if "1D" in views_in_order:
                     print("Processing 1D features...")
                     emb_1d = ((emb_1d_low + emb_1d_high) / 2).cpu().numpy().flatten()
                     print(f"1D feature dimension: {emb_1d.shape[0]}")
-                # 2D
+
                 if "2D" in views_in_order:
                     print("Processing 2D features...")
                     emb_2d = emb_2d_t.cpu().numpy().flatten()
                     print(f"2D feature dimension: {emb_2d.shape[0]}")
-                # 3D
+
                 if "3D" in views_in_order:
                     print("Processing 3D features...")
                     emb_3d = emb_3d_t.cpu().numpy().flatten()
                     print(f"3D feature dimension: {emb_3d.shape[0]}")
 
-            # ====== 再做 BERT（如需要）======
             bert_vec = None
             if need_bert:
                 print("Extracting BERT features...")
@@ -156,7 +145,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
                     removelist.append(drug_id)
                     continue
 
-            # ====== 组合向量（严格按 views_in_order 顺序）======
             for v in views_in_order:
                 if v == "1D":
                     if emb_1d is None:
@@ -179,7 +167,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
                         removelist.append(drug_id); break
                     vecs_to_concat.append(bert_vec)
                 elif v == "fingerprint":
-                    # 如需组合 fingerprint，可在此扩展；本次需求未涉及
                     print("Error: fingerprint not supported inside combos in this implementation.")
                     removelist.append(drug_id); break
                 else:
@@ -190,7 +177,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
                 continue
 
             if len(views_in_order) == 1 and views_in_order[0] == "fingerprint":
-                # 单独 fingerprint 的老逻辑
                 print("Using fingerprint feature extraction...")
                 try:
                     mol = Chem.MolFromSmiles(smiles)
@@ -207,7 +193,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
                     removelist.append(drug_id)
                     continue
 
-            # ====== 得到最终指纹向量 ======
             drug_fingerprints = np.concatenate(vecs_to_concat, axis=-1).astype(np.float32)
             print(f"Final feature dim ({'+'.join(views_in_order)}): {drug_fingerprints.shape[0]}")
 
@@ -223,7 +208,6 @@ def process_dataset(train_data, feature_type, device, save_dir="extracted_featur
         if drug_id in ftrain:
             ftrain.remove(drug_id)
 
-    # 文件名里避免 '+' 带来路径问题
     save_key = ("multi" if norm_spec.lower() == "multi" else "+".join(views_in_order)).replace("+", "_")
 
     if alldrugtrain:
