@@ -30,7 +30,6 @@ class DrugSHAPAnalyzer:
         self.total_dim = sum(v['dim'] for v in feature_config.values())
         print(f"Total feature dimension configured: {self.total_dim}")
         
-        # 新增：用于存储特征摘要的字典
         self.feature_summary = {
             'mean_abs_shap_drug1': None,
             'mean_abs_shap_drug2': None,
@@ -128,10 +127,8 @@ class DrugSHAPAnalyzer:
             
             pbar.close()
             if self.shap_values is not None and not np.isnan(self.shap_values).all():
-                # 计算Drug1和Drug2各特征的平均绝对SHAP值（重要性）
                 self.feature_summary['mean_abs_shap_drug1'] = np.nanmean(np.abs(self.shap_values[:, 0, :]), axis=0)
                 self.feature_summary['mean_abs_shap_drug2'] = np.nanmean(np.abs(self.shap_values[:, 1, :]), axis=0)
-                # 计算Drug1和Drug2各特征的平均SHAP值（方向性）
                 self.feature_summary['mean_shap_drug1'] = np.nanmean(self.shap_values[:, 0, :], axis=0)
                 self.feature_summary['mean_shap_drug2'] = np.nanmean(self.shap_values[:, 1, :], axis=0)
                 
@@ -146,29 +143,22 @@ class DrugSHAPAnalyzer:
             return self.shap_values
 
     def save_shap_summary_to_csv(self, output_path="shap_feature_summary.csv"):
-        """
-        将每个特征维度的详细SHAP统计信息保存到CSV文件。
-        包括特征索引、所属模态、药物来源、平均绝对SHAP值（重要性）和平均SHAP值（方向）。
-        """
+    
         if self.feature_summary['mean_abs_shap_drug1'] is None:
             print("Warning: No SHAP summary data available. Please run compute_shap() first.")
             return
 
-        # 准备数据列表
         data = []
         
-        # 遍历所有特征索引 (0 到 total_dim-1)
         for global_idx in range(self.total_dim):
-            # 确定当前索引属于哪个模态
             modality_name = "Unknown"
             local_idx = global_idx
             for name, config in self.feature_config.items():
                 if config['start'] <= global_idx < config['start'] + config['dim']:
                     modality_name = name.upper() if name.lower() != 'bert' else 'BERT'
-                    local_idx = global_idx - config['start']  # 在该模态内的局部索引
+                    local_idx = global_idx - config['start']  
                     break
             
-            # 为Drug1和Drug2添加一行记录
             row_drug1 = {
                 'global_index': global_idx,
                 'modality': modality_name,
@@ -190,17 +180,13 @@ class DrugSHAPAnalyzer:
             data.append(row_drug1)
             data.append(row_drug2)
         
-        # 创建DataFrame并排序（按重要性降序）
         df_summary = pd.DataFrame(data)
-        # 按平均绝对SHAP值降序排序，以便最重要的特征排在最前面
         df_summary.sort_values(by='mean_abs_shap', ascending=False, inplace=True)
         
-        # 保存到CSV
         df_summary.to_csv(output_path, index=False)
         print(f"SHAP feature summary saved to: {output_path}")
         
-        # 同时打印一些统计信息以供快速参考
-        print("\n=== 各模态平均贡献度 (Mean |SHAP|) ===")
+        print("\n=== Average Contribution for seperate Module (Mean |SHAP|) ===")
         for modality in df_summary['modality'].unique():
             if modality == "Unknown":
                 continue
@@ -259,62 +245,52 @@ class DrugSHAPAnalyzer:
         self._plot_top30_average_shap(output_dir)
 
     def _plot_top30_average_shap(self, output_dir):
-        """新增：绘制八个维度的Top30 SHAP平均值横向条形图"""
         if self.shap_values is None:
             return
             
-        # 准备数据
         data = []
         display_names = {}
         for name in self.feature_config:
             display_names[name] = "BERT" if name.lower() == "bert" else name.upper()
         
-        # 计算Drug1和Drug2各维度的Top30平均SHAP
         for drug_idx, drug_name in [(0, 'Drug1'), (1, 'Drug2')]:
             for name, config in self.feature_config.items():
                 start, end = config['start'], config['start'] + config['dim']
                 shap_subset = self.shap_values[:, drug_idx, start:end]
                 
-                # 计算每个特征的绝对SHAP平均值
                 mean_abs_shap = np.nanmean(np.abs(shap_subset), axis=0)
                 
-                # 获取Top30特征
                 top_indices = np.argsort(mean_abs_shap)[-30:][::-1]
                 top_shap = mean_abs_shap[top_indices]
                 
-                # 计算Top30的平均值
                 avg_top30 = np.mean(top_shap)
                 
                 data.append({
                     'Dimension': f"{drug_name} {display_names[name]}",
                     'Average_SHAP': avg_top30,
-                    'Color': '#4e79a7' if drug_idx == 0 else '#f28e2b',  # Drug1蓝色，Drug2橙色
-                    'Drug': drug_name  # 新增列用于hue分组
+                    'Color': '#4e79a7' if drug_idx == 0 else '#f28e2b',  
+                    'Drug': drug_name  
                 })
         
         df = pd.DataFrame(data)
         
-        # 绘制横向条形图
         plt.figure(figsize=(12, 6))
         ax = sns.barplot(data=df, y='Dimension', x='Average_SHAP', 
-                        hue='Drug',  # 使用hue参数替代直接指定palette
-                        palette=['#4e79a7', '#f28e2b'],  # 定义Drug1和Drug2的颜色
-                        dodge=False,  # 确保所有条形在同一位置
-                        legend=False)  # 隐藏图例
+                        hue='Drug',  
+                        palette=['#4e79a7', '#f28e2b'],  
+                        dodge=False,  
+                        legend=False)  
         
-        # 美化图表
         ax.set_title("Average Top30 SHAP Values by Dimension", fontsize=16, pad=20)
         ax.set_xlabel("Average Absolute SHAP Value (Top30 Features)", fontsize=12)
         ax.set_ylabel("")
         
-        # 添加数值标签
         for p in ax.patches:
             width = p.get_width()
             ax.text(width + 0.002, p.get_y() + p.get_height()/2.,
                 f'{width:.4f}',
                 ha='left', va='center', fontsize=10)
         
-        # 设置字体
         for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
                     ax.get_xticklabels() + ax.get_yticklabels()):
             item.set_family('serif')
@@ -324,7 +300,6 @@ class DrugSHAPAnalyzer:
         plt.savefig(f"{output_dir}/top30_average_shap_by_dimension.png", dpi=300, bbox_inches='tight')
         plt.close()
         
-        # 同时保存CSV文件
         df.to_csv(f"{output_dir}/top30_average_shap_by_dimension.csv", index=False)
         print(f"Saved Top30 average SHAP by dimension to {output_dir}/top30_average_shap_by_dimension.csv")
 
@@ -431,19 +406,15 @@ class DrugSHAPAnalyzer:
             plt.close()
 
     def _plot_combined_shap_summary(self, ax, title, max_display=30, output_path=None, title_fontsize=14):
-        """修正后的SHAP summary plot，确保Drug1和Drug2特征都能正确显示"""
-        # ================ 关键修改1：重要性计算方式 ================
-        # 分别计算Drug1和Drug2的特征重要性（避免索引重叠）
+
         drug1_importance = np.nanmean(np.abs(self.shap_values[:, 0, :]), axis=0)
         drug2_importance = np.nanmean(np.abs(self.shap_values[:, 1, :]), axis=0)
         
-        # 合并重要性时添加偏移量（Drug2索引从total_dim开始）
         combined_importance = np.concatenate([
-            drug1_importance,       # 索引 0 到 total_dim-1
-            drug2_importance        # 索引 total_dim 到 2*total_dim-1
+            drug1_importance,       
+            drug2_importance        
         ])
         
-        # 获取top特征索引（现在包含Drug1和Drug2）
         top_indices = np.argsort(combined_importance)[-max_display:][::-1]
         
         if ax is None:
@@ -452,16 +423,13 @@ class DrugSHAPAnalyzer:
         else:
             save_fig = False
         
-        # ================ 关键修改2：特征标签生成 ================
         feature_names = []
         for idx in top_indices:
-            # 判断特征属于Drug1还是Drug2
             if idx < self.total_dim:
                 drug_label, adjusted_idx = "Drug1", idx
             else:
                 drug_label, adjusted_idx = "Drug2", idx - self.total_dim
             
-            # 查找特征所属的视图（BERT/1D/2D/3D）
             for name, config in self.feature_config.items():
                 if config['start'] <= adjusted_idx < config['start'] + config['dim']:
                     display_name = "BERT" if name.lower() == "bert" else name.upper()
@@ -470,8 +438,6 @@ class DrugSHAPAnalyzer:
                     )
                     break
         
-        # ================ 数据准备 ================
-        # 合并SHAP值（同样添加偏移量）
         all_shap = np.concatenate([
             self.shap_values[:, 0, :],  # Drug1 SHAP
             self.shap_values[:, 1, :]   # Drug2 SHAP
@@ -480,44 +446,36 @@ class DrugSHAPAnalyzer:
         top_shap = all_shap[:, top_indices]
         n_samples, n_features = top_shap.shape
         
-        # ================ 绘图逻辑 ================
         y_pos = np.arange(n_features)
         
-        # 颜色映射（基于随机值示例）
         feature_values = np.random.rand(n_samples)
         cmap = sns.diverging_palette(250, 350, as_cmap=True)
         norm = plt.Normalize(vmin=feature_values.min(), vmax=feature_values.max())
         
-        # 绘制每个样本的SHAP值
         for i in range(n_samples):
             ax.scatter(top_shap[i], y_pos,
                     c=[cmap(norm(feature_values[i]))] * n_features,
                     s=40, alpha=0.7, edgecolors='w', linewidth=0.3)
         
-        # 添加均值参考线
         mean_shap = np.nanmean(top_shap, axis=0)
         ax.scatter(mean_shap, y_pos, c='black', marker='|', s=200, label='Mean')
         
-        # 坐标轴设置
         ax.axvline(0, color='gray', linestyle='--', linewidth=0.8)
         ax.set_yticks(y_pos)
-        ax.set_yticklabels([feature_names[n_features-i-1] for i in range(n_features)])  # 倒序显示
+        ax.set_yticklabels([feature_names[n_features-i-1] for i in range(n_features)])  
         ax.set_xlabel("SHAP Value", fontsize=12)
         
-        # 字体设置（Times New Roman）
         for label in chain(ax.get_xticklabels(), ax.get_yticklabels()):
             label.set_family('serif')
             label.set_name('Times New Roman')
             label.set_fontsize(10)
         
-        # 标题和标签字体
         title_obj = ax.set_title(title, fontsize=title_fontsize, pad=20)
         title_obj.set_family('serif')
         title_obj.set_name('Times New Roman')
         ax.xaxis.label.set_family('serif')
         ax.xaxis.label.set_name('Times New Roman')
         
-        # 颜色条
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax)
@@ -526,14 +484,12 @@ class DrugSHAPAnalyzer:
             label.set_family('serif')
             label.set_name('Times New Roman')
         
-        # 图例和网格
         legend = ax.legend(loc='upper right', fontsize=10)
         for text in legend.get_texts():
             text.set_family('serif')
             text.set_name('Times New Roman')
         ax.grid(True, axis='x', alpha=0.3)
         
-        # 底部说明文字
         note = ax.text(0.5, -0.15, "Red = High Value, Blue = Low Value", 
                     ha="center", transform=ax.transAxes,
                     fontsize=10, color='dimgrey')
