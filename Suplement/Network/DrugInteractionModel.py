@@ -57,9 +57,7 @@ class CrossAttention(nn.Module):
 
 
 class DrugInteractionModel(nn.Module):
-    """
-    Cross-Attention + 对称特征融合 + Spiking Conv Capsule Head
-    """
+
     def __init__(self, feature_config, hidden_dim=64, num_classes=2, temperature=0.5):
         super().__init__()
         self.feature_config = feature_config
@@ -106,7 +104,6 @@ class DrugInteractionModel(nn.Module):
     def split_features(self, x):
         """
         x: [B, 1, total_dim]
-        根据 feature_config 的 start / dim 切成多视角。
         """
         return {
             name: x[:, :, cfg['start']: cfg['start'] + cfg['dim']]

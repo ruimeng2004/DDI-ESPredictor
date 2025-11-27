@@ -25,7 +25,7 @@ def spike_fn(v, thr):
 
 class LIFCell(nn.Module):
     """
-    Iterative LIF 神经元，用在 SConv / PrimaryCaps 里做时序积分。
+    Iterative LIF 
     """
     def __init__(self, size, tau_m=2.0, v_th=1.0, v_reset=0.0):
         super().__init__()
@@ -60,12 +60,9 @@ class LIFCell(nn.Module):
         return torch.stack(spikes, 1), torch.stack(vtraj, 1)
 
 
-# ---------- tau-BN (一维版) ----------
+# ---------- tau-BN ----------
 class TauBN1d(nn.Module):
-    """
-    按 SCCapsNet 论文里的 tau-BN 思路实现的一维版本：
-    大致相当于 BN(x) / (1 - 1/tau_m)，放大满足放电条件的输入范围。
-    """
+   
     def __init__(self, num_features, tau_m=2.0, eps=1e-5, momentum=0.1):
         super().__init__()
         self.bn = nn.BatchNorm1d(num_features, eps=eps,
@@ -80,13 +77,9 @@ class TauBN1d(nn.Module):
         return y * factor
 
 
-# ---------- Spiking Conv (1D 向量版 SConv) ----------
+# ---------- Spiking Conv  ----------
 class SConv1DLayer(nn.Module):
-    """
-    把融合后的向量当成长度为 L 的一维“序列”：
-        x -> Conv1d(1->1, k=3, padding=1) -> tau-BN -> LIF(T 步) -> 时间平均
-    输出还是 [B, L]，方便级联多层，以及接到 PrimaryCaps。
-    """
+
     def __init__(self, input_len, tau_m=2.0, T=4):
         super().__init__()
         self.input_len = input_len
@@ -100,23 +93,18 @@ class SConv1DLayer(nn.Module):
         x: [B, input_len]
         return: [B, input_len]
         """
-        # Conv1d over feature axis
         z = self.conv(x.unsqueeze(1)).squeeze(1)  # [B, L]
         z = self.bn(z)
 
-        # 直接编码：每个时间步输入相同 z
         I = z.unsqueeze(1).repeat(1, self.T, 1)   # [B, T, L]
         spikes, _ = self.lif(I, reset_state=True)
 
-        # firing-rate 表征
         return spikes.mean(dim=1)                 # [B, L]
 
 
 # ---------- Primary Capsule ----------
 class SharedPrimaryCaps(nn.Module):
-    """
-    用 shared MLP + 脉冲 LIF，把输入向量编码成 T 步的脉冲胶囊。
-    """
+   
     def __init__(self, input_dim, num_capsules=8, caps_dim=8, T=10):
         super().__init__()
         self.T = T
@@ -128,7 +116,6 @@ class SharedPrimaryCaps(nn.Module):
             nn.GLU()
         )
 
-        # 每个 primary capsule 一组投影头
         self.heads = nn.Parameter(
             torch.randn(num_capsules, caps_dim, caps_dim) * 0.02
         )
@@ -149,9 +136,7 @@ class SharedPrimaryCaps(nn.Module):
 
 # ---------- STDP Digit Capsule ----------
 class STDPDigitCaps(nn.Module):
-    """
-    改进 STDP 动态路由的 digit capsules（向量版）。
-    """
+
     def __init__(
         self,
         in_caps=8,
@@ -261,12 +246,12 @@ class PerClassReadout(nn.Module):
         return logits
 
 
-# ---------- 整体 Spiking Conv Capsule Head ----------
+# ---------- Spiking Conv Capsule Head ----------
 class SCCapsNetHead(nn.Module):
     """
-    结构：
-        x (融合后的向量)
-          -> (可选) 多层 SConv1DLayer
+    structure:
+        x 
+          ->  SConv1DLayer
           -> SharedPrimaryCaps
           -> STDPDigitCaps + AttnDigitCaps
           -> PerClassReadout / L2-norm-length
@@ -289,7 +274,6 @@ class SCCapsNetHead(nn.Module):
         self.use_fc_head = use_fc_head
         self.use_sconv = use_sconv
 
-        # SConv（前半段）
         if use_sconv and sconv_layers > 0:
             sconv_list = []
             for _ in range(sconv_layers):
@@ -300,7 +284,6 @@ class SCCapsNetHead(nn.Module):
             self.sconv = None
             caps_input_dim = input_dim
 
-        # Primary + Digit Capsules（后半段）
         self.primary = SharedPrimaryCaps(
             caps_input_dim,
             num_capsules=num_primary,
@@ -332,11 +315,9 @@ class SCCapsNetHead(nn.Module):
             v:      [B, C, D]
             logits: [B, C]  (若 use_fc_head=False，则为 capsule length)
         """
-        # SConv 前半段
         if self.sconv is not None:
             x = self.sconv(x)              # [B, input_dim]
 
-        # 胶囊部分
         spikes = self.primary(x)           # [B, T, P, Dp]
         v_stdp = self.stdp_digit(spikes)   # [B, C, Dc]
         v_attn = self.attn_digit(spikes)   # [B, C, Dc]
