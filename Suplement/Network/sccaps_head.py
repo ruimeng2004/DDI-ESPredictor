@@ -313,7 +313,7 @@ class SCCapsNetHead(nn.Module):
         return:
             probs:  [B, C]
             v:      [B, C, D]
-            logits: [B, C]  (若 use_fc_head=False，则为 capsule length)
+            logits: [B, C]  
         """
         if self.sconv is not None:
             x = self.sconv(x)              # [B, input_dim]
