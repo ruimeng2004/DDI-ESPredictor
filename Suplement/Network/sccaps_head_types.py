@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 # ---------- surrogate spike + LIF ----------
@@ -24,9 +25,6 @@ def spike_fn(v, thr):
 
 
 class LIFCell(nn.Module):
-    """
-    Iterative LIF 神经元，用在 SConv / PrimaryCaps 里做时序积分。
-    """
     def __init__(self, size, tau_m=2.0, v_th=1.0, v_reset=0.0):
         super().__init__()
         self.size = size
@@ -96,10 +94,6 @@ class SConv1DLayer(nn.Module):
         self.lif = LIFCell(size=(input_len,), tau_m=tau_m)
 
     def forward(self, x):
-        """
-        x: [B, input_len]
-        return: [B, input_len]
-        """
         # Conv1d over feature axis
         z = self.conv(x.unsqueeze(1)).squeeze(1)  # [B, L]
         z = self.bn(z)
@@ -136,10 +130,6 @@ class SharedPrimaryCaps(nn.Module):
         self.lif = LIFCell(size=(num_capsules, caps_dim))
 
     def forward(self, x):
-        """
-        x: [B, input_dim]
-        return spikes: [B, T, num_caps, caps_dim]
-        """
         base = self.shared(x)  # [B, caps_dim]
         proj = torch.einsum('b d, k d h -> b k h', base, self.heads)  # [B, K, caps_dim]
         I = proj.unsqueeze(1).repeat(1, self.T, 1, 1)  # [B, T, K, caps_dim]
@@ -175,40 +165,29 @@ class STDPDigitCaps(nn.Module):
         self.tau_pre, self.tau_post, self.eta = tau_pre, tau_post, eta
 
     def forward(self, primary_spikes):
-        """
-        primary_spikes: [B, T, in_caps, in_dim]
-        return v: [B, out_caps, out_dim]
-        """
         B, T = primary_spikes.shape[0], primary_spikes.shape[1]
-
-        # u_hat: [B, T, out_caps, out_dim]
         u_hat = torch.einsum('o i h d, b t i d -> b t o h', self.W, primary_spikes)
 
         b = torch.zeros(B, self.in_caps, self.out_caps, device=u_hat.device)
         pre_trace = torch.zeros(B, self.in_caps, device=u_hat.device)
         post_trace = torch.zeros(B, self.out_caps, device=u_hat.device)
-
         a_pre = torch.exp(torch.tensor(-1.0 / self.tau_pre, device=u_hat.device))
         a_post = torch.exp(torch.tensor(-1.0 / self.tau_post, device=u_hat.device))
         thr_post = 0.5
 
         for t in range(T):
-            pre = primary_spikes[:, t].sum(dim=-1)   # [B, in_caps]
-            post_act = u_hat[:, t].norm(dim=-1)      # [B, out_caps]
-            post = (post_act >= thr_post).float()    # [B, out_caps]
-
+            pre = primary_spikes[:, t].sum(dim=-1)            # [B, in_caps]
+            post_act = u_hat[:, t].norm(dim=-1)               # [B, out_caps]
+            post = (post_act >= thr_post).float()             # [B, out_caps]
             pre_trace = a_pre * pre_trace + pre
             post_trace = a_post * post_trace + post
-
-            delta = (
-                torch.einsum('b i, b o -> b i o', pre_trace, post)
-                + torch.einsum('b o, b i -> b i o', post_trace, pre)
-            )
+            delta = torch.einsum('b i, b o -> b i o', pre_trace, post) + \
+                    torch.einsum('b o, b i -> b i o', post_trace, pre)
             b = b + self.eta * delta
 
-        c = torch.softmax(b, dim=-1)                 # [B, in_caps, out_caps]
+        c = torch.softmax(b, dim=-1)                         # [B, in_caps, out_caps]
         s = torch.einsum('b i o, b t o h -> b t o h', c, u_hat)  # [B, T, out_caps, out_dim]
-        v = s.mean(dim=1)                            # [B, out_caps, out_dim]
+        v = s.mean(dim=1)                                      # [B, out_caps, out_dim]
         return v
 
 
@@ -223,17 +202,12 @@ class AttnDigitCaps(nn.Module):
         self.proj_out = nn.Linear(out_dim, out_dim)
 
     def forward(self, primary_spikes):
-        """
-        primary_spikes: [B, T, in_caps, in_dim]
-        return v: [B, out_caps, out_dim]
-        """
         x = primary_spikes.mean(1)  # [B, in_caps, in_dim]
         Q, K, V = self.query(x), self.key(x), self.value(x)  # [B, I, Do]
         attn = torch.softmax(
             Q @ K.transpose(1, 2) / (K.size(-1) ** 0.5), dim=-1
         )  # [B, I, I]
         U = attn @ V  # [B, I, Do]
-
         chunks = torch.chunk(U, self.out_caps, dim=1)
         v = torch.stack([c.mean(1) for c in chunks], dim=1)  # [B, out_caps, out_dim]
         return self.proj_out(v)
@@ -274,7 +248,7 @@ class SCCapsNetHead(nn.Module):
     def __init__(
         self,
         input_dim,
-        num_classes=2,
+        num_classes=86,
         T=10,
         num_primary=8,
         primary_dim=8,

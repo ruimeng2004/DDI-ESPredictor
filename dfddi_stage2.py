@@ -10,19 +10,25 @@ from sklearn.model_selection import KFold
 import torch.nn.functional as F
 from Suplement.config import get_args
 from Suplement.feature_extractor import process_dataset
-from Suplement.Network.DrugInteractionModel import DrugInteractionModel
+from Suplement.Network.DruginteractionModel_type import DrugInteractionModel
 from Suplement.SHAP_analysis.shap_analyzer import DrugSHAPAnalyzer
 
-# ===================== Model Training Function (stage2 aligned to stage3) =====================
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+# ===================== Model Training Function =====================
 def train_model(model, train_loader, optimizer, criterion, margin_criterion, device, epochs=100):
     model.train()
+    grad_history = {'norms': [], 'lr': [], 'loss': [], 'ce': [], 'margin': [], 'accuracy': []}
+    base_lr = 1e-3
+    lr = base_lr
 
     for epoch in range(epochs):
-        epoch_loss = 0.0
-        epoch_ce = 0.0
-        epoch_margin = 0.0
+        epoch_loss = epoch_ce = epoch_margin = epoch_accuracy = 0.0
+        epoch_grad_norms = []
 
-        # --- 动态损失权重：前期CE权重大，后期margin逐步增大（与stage3一致） ---
         progress = epoch / epochs
         if progress > 0.7:
             ce_weight, margin_weight = 0.5, 0.5
@@ -34,23 +40,28 @@ def train_model(model, train_loader, optimizer, criterion, margin_criterion, dev
         for batch_idx, (drug_pairs, labels) in enumerate(train_loader):
             drug_pairs = drug_pairs.to(device)
             labels = labels.to(device)
-
             drug1 = drug_pairs[:, 0, :]
             drug2 = drug_pairs[:, 1, :]
 
             optimizer.zero_grad()
 
-            # === 与 stage3 对齐：_forward 解包三项，CE 用 logits ===
             probs, digit_caps, logits = model._forward(drug1, drug2)
             ce_loss = criterion(logits, labels)
-
-            num_classes = digit_caps.size(1)  # 与 digit_caps 对齐
+            num_classes = digit_caps.size(1)
             margin_loss = margin_criterion(
                 digit_caps, F.one_hot(labels, num_classes=num_classes).float()
             )
-
             total_loss = ce_weight * ce_loss + margin_weight * margin_loss
+
             total_loss.backward()
+
+            total_norm = 0.0
+            for p in model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm **= 0.5
+            epoch_grad_norms.append(total_norm)
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -59,15 +70,78 @@ def train_model(model, train_loader, optimizer, criterion, margin_criterion, dev
             epoch_ce += ce_loss.item()
             epoch_margin += margin_loss.item()
 
-        avg_loss = epoch_loss / len(train_loader)
-        avg_ce = epoch_ce / len(train_loader)
-        avg_margin = epoch_margin / len(train_loader)
-        print(f"Epoch {epoch+1:03d} | Avg Loss: {avg_loss:.4f} | CE: {avg_ce:.4f} | Margin: {avg_margin:.4f} "
-              f"| Weights(CE/Margin)={ce_weight:.1f}/{margin_weight:.1f}")
+            # Accuracy calculation (assuming classification task)
+            _, predicted = logits.max(1)
+            correct = (predicted == labels).sum().item()
+            accuracy = correct / len(labels)
+            epoch_accuracy += accuracy
+
+        avg_grad_norm = np.mean(epoch_grad_norms)
+        grad_history['norms'].append(avg_grad_norm)
+        grad_history['lr'].append(lr)
+        grad_history['loss'].append(epoch_loss / len(train_loader))
+        grad_history['ce'].append(epoch_ce / len(train_loader))
+        grad_history['margin'].append(epoch_margin / len(train_loader))
+        grad_history['accuracy'].append(epoch_accuracy / len(train_loader))
+
+        print(f"Epoch {epoch+1:03d} | Loss: {grad_history['loss'][-1]:.4f} | "
+              f"CE: {grad_history['ce'][-1]:.4f} | Margin: {grad_history['margin'][-1]:.4f} | "
+              f"Accuracy: {grad_history['accuracy'][-1]:.4f} | "
+              f"LR: {lr:.6f} | GradNorm: {avg_grad_norm:.4f}")
+
+    plot_training_dynamics(grad_history)
+    return grad_history
+
+
+def plot_training_dynamics(history):
+    """
+    Function to plot training dynamics: loss, accuracy, gradient norm, learning rate
+    """
+    plt.figure(figsize=(15, 10))
+    
+    # Loss, CE, Margin
+    plt.subplot(2, 2, 1)
+    plt.plot(history['loss'], label='Total Loss')
+    plt.plot(history['ce'], label='CE Loss')
+    plt.plot(history['margin'], label='Margin Loss')
+    plt.title('Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+
+    # Accuracy Plot
+    plt.subplot(2, 2, 2)
+    plt.plot(history['accuracy'], label='Accuracy')
+    plt.title('Training Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.grid(True)
+
+    # Learning Rate
+    plt.subplot(2, 2, 3)
+    plt.plot(history['lr'], label='Learning Rate')
+    plt.title('Learning Rate')
+    plt.xlabel('Epoch')
+    plt.ylabel('LR')
+    plt.grid(True)
+
+    # Gradient Norm vs Learning Rate (log-log plot)
+    plt.subplot(2, 2, 4)
+    plt.plot(np.log10(history['lr']), np.log10(history['norms']), 'o-')
+    plt.title('LR vs Gradient Norm (log-log)')
+    plt.xlabel('log10(LR)')
+    plt.ylabel('log10(GradNorm)')
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.savefig('/Figure/Training_Dynamics/Stage2_Training_Dynamics_Plot.png')
+    plt.close()
+       
 
 # ===================== Evaluation Metrics (stage2 aligned to stage3) =====================
 def evaluate_model(model, test_loader, device, num_classes=86):
-    """多分类评估（与stage3一致：用_logits_计算softmax）"""
+
     model.eval()
     all_logits, all_probs, all_labels = [], [], []
 
@@ -111,14 +185,14 @@ def evaluate_model(model, test_loader, device, num_classes=86):
                 roc_auc_scores.append(roc_auc_score(class_true, class_probs))
         metrics['roc_auc_avg'] = np.mean(roc_auc_scores) if len(roc_auc_scores) > 0 else float('nan')
     except Exception as e:
-        print(f"无法计算ROC AUC: {e}")
+        print(f"Unable to calculate ROC AUC: {e}")
         metrics['roc_auc_avg'] = float('nan')
 
     return metrics, all_probs.numpy(), pred_labels
 
-# ===================== 5-Fold Cross Validation（保持不变，仅演示） =====================
+# ===================== 5-Fold Cross Validation =====================
 def run_5fold_cv(X, Y, feature_type, device, epochs=100):
-    """执行5折交叉验证"""
+
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_results = []
 
@@ -179,9 +253,9 @@ def run_5fold_cv(X, Y, feature_type, device, epochs=100):
 
     return avg_metrics
 
-# ===================== Main Function（仅改stage2训练/评估用法，其他保持不变） =====================
+# ===================== Main Function =====================
 if __name__ == "__main__":
-    print(f"当前使用的设备: {'GPU' if torch.cuda.is_available() else 'CPU'} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
+    print(f"device used: {'GPU' if torch.cuda.is_available() else 'CPU'} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
     args = get_args()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -205,18 +279,43 @@ if __name__ == "__main__":
     X = torch.tensor(X, dtype=torch.float32)
     Y = torch.tensor(Y, dtype=torch.long)
 
+    dims_map = {
+        "bert": 300,
+        "fingerprint": 512,  
+        "3D": 128,
+        "2D": 128,
+        "1D": 128,
+        "multi": 128 * 3 + 300, 
+        "1D+2D": 128*2,
+        "1D+3D": 128*2,
+        "1D+bert": 128+300,
+        "2D+3D": 128*2,
+        "2D+bert": 128+300,
+        "3D+bert": 128+300,
+        "1D+2D+3D": 128*3,
+        "1D+2D+bert": 128*2+300,
+        "1D+3D+bert": 128*2+300,
+        "2D+3D+bert": 128*2+300
+    }
+    
+    def build_feature_config(feature: str) -> dict:
+        if feature == "multi":
+            return {
+                '1D':   {'dim': 128, 'start': 0},
+                '2D':   {'dim': 128, 'start': 128},
+                '3D':   {'dim': 128, 'start': 256},
+                'bert': {'dim': 300, 'start': 384}
+            }
+        else:
+            return {feature: {'dim': dims_map[feature], 'start': 0}}
+        
     # print("\n=== Starting 5-Fold Cross Validation ===")
     # cv_results = run_5fold_cv(X, Y, args.feature, device, epochs=100)
 
     print("\n=== Training Final Model on Entire Dataset ===")
     train_loader = DataLoader(TensorDataset(X, Y), batch_size=32, shuffle=True)
 
-    feature_config = {
-        '1D': {'dim': 128, 'start': 0},
-        '2D': {'dim': 128, 'start': 128},
-        '3D': {'dim': 128, 'start': 256},
-        'bert': {'dim': 300, 'start': 384}
-    }
+    feature_config = build_feature_config(args.feature)
 
     model = DrugInteractionModel(
         feature_config=feature_config,
@@ -231,13 +330,13 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
 
     print("Training final model...")
-    train_model(model, train_loader, optimizer, criterion, margin_criterion, device, epochs=5)
+    train_model(model, train_loader, optimizer, criterion, margin_criterion, device, epochs=100)
 
-    model_save_path = 'model.pth'
+    model_save_path = 'File/pth_file/Stage2_model.pth'
     torch.save(model.state_dict(), model_save_path)
     print(f"\nModel weights saved to {model_save_path}")
 
-    # ===================== 评估最终模型 =====================
+    # ===================== Final Evaluation =====================
     print("\n=== Evaluating Final Model on Entire Dataset ===")
 
     test_loader = DataLoader(TensorDataset(X, Y), batch_size=32, shuffle=False)
@@ -262,10 +361,10 @@ if __name__ == "__main__":
         'Prob_Class2': all_probs[:, 2]
     })
 
-    results_df.to_csv('final_model_predictions.csv', index=False)
-    print("\n预测结果已保存到 final_model_predictions.csv")
+    results_df.to_csv('File/Prediction_Outcome/Stage2_predictions.csv', index=False)
+    print("\nPrediction results saved to File/Prediction_Outcome/Stage2_predictions.csv")
 
-    # ===================== SHAP 分析（保持不变） =====================
+    # ===================== SHAP Analysis =====================
     print("\n=== Starting SHAP Analysis (100 drug pairs) ===")
 
     feature_config = {
@@ -292,7 +391,7 @@ if __name__ == "__main__":
         batch_size=2
     )
 
-    df_summary = analyzer.save_shap_summary_to_csv("detailed_shap_analysis.csv")
+    df_summary = analyzer.save_shap_summary_to_csv("/Figure/SHAP/Stage2_shap_analysis.csv")
 
     if not np.isnan(shap_values).all():
         print("\nGenerating visualizations...")

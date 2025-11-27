@@ -6,7 +6,7 @@ Our model incorporates a unique capsule network architecture with cross-attentio
 - [Quick Start](#quick-start)
 - [User Interface](#user-interface)
 
-![DDI-ESPredictor Architecture](image.png)
+![DDI-ESPredictor Architecture](Model.jpg)
 
 <a name="install"></a>
 ## Environment Setup

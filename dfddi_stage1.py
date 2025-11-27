@@ -129,7 +129,7 @@ def plot_gradient_history(history):
     plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig('training_dynamics.png')
+    plt.savefig('/Figure/Training_Dynamics/Stage1_training_dynamics.png')
     plt.close()
 
 def evaluate_model(model, test_loader, device):
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     
     train_model(model, train_loader, optimizer, criterion, margin_criterion, device, epochs=100)
     
-    model_save_path = 'model.pth'
+    model_save_path = 'File/pth_file/Stage1_model.pth'
     torch.save(model.state_dict(), model_save_path)
     print(f"\nModel saved to {model_save_path}")
 
@@ -361,8 +361,8 @@ if __name__ == "__main__":
         'Prob_Class0': np.concatenate(all_probs)[:, 0],
         'Prob_Class1': np.concatenate(all_probs)[:, 1]
     })
-    results_df.to_csv('improved_predictions.csv', index=False)
-    print("\nPrediction results saved to improved_predictions.csv")
+    results_df.to_csv('File/Prediction_Outcome/Stage1_predictions.csv', index=False)
+    print("\nPrediction results saved to File/Prediction_Outcome/Stage1_predictions.csv")
 
     print("\n=== Starting SHAP Analysis (100 drug pairs) ===")
     print("\n=== Data Validation ===")
@@ -382,7 +382,7 @@ if __name__ == "__main__":
         batch_size=2   
     )
 
-    df_summary = analyzer.save_shap_summary_to_csv("detailed_shap_analysis.csv")
+    df_summary = analyzer.save_shap_summary_to_csv("/Figure/SHAP/Stage1_shap_analysis.csv")
 
     if not np.isnan(shap_values).all():
         print("\nGenerating visualizations...")

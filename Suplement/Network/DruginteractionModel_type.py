@@ -2,9 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from Suplement.Network.Cap_net import MarginLoss
-from Suplement.Network.sccaps_head import SCCapsNetHead
+from Suplement.Network.sccaps_head_types import SCCapsNetHead
 
 
 class CrossAttention(nn.Module):
@@ -14,23 +13,19 @@ class CrossAttention(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.query_proj = nn.ModuleDict({
-            name: nn.Linear(hidden_dim, hidden_dim)
+            name: nn.Linear(hidden_dim, hidden_dim)  
             for name in view_dims.keys()
         })
         self.key_proj = nn.ModuleDict({
-            name: nn.Linear(hidden_dim, hidden_dim)
+            name: nn.Linear(hidden_dim, hidden_dim) 
             for name in view_dims.keys()
         })
         self.value_proj = nn.ModuleDict({
-            name: nn.Linear(hidden_dim, hidden_dim)
+            name: nn.Linear(hidden_dim, hidden_dim) 
             for name in view_dims.keys()
         })
-
+        
     def forward(self, drugA_views, drugB_views):
-        """
-        drugA_views / drugB_views: dict[name] -> [B, H]
-        return fused_views[name]: [B, H]
-        """
         fused_views = {name: [] for name in self.view_names}
 
         for name_A in self.view_names:
@@ -39,18 +34,16 @@ class CrossAttention(nn.Module):
                 K = self.key_proj[name_B](drugB_views[name_B])    # [B, H]
                 V = self.value_proj[name_B](drugB_views[name_B])  # [B, H]
 
-                attn_scores = torch.matmul(
-                    Q, K.transpose(-2, -1)
-                ) / math.sqrt(Q.size(-1))         # [B, B]
+                attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(Q.size(-1))  # [B, B]
                 attn_weights = F.softmax(attn_scores, dim=-1)
-                fused = torch.matmul(attn_weights, V)             # [B, H]
+                fused = torch.matmul(attn_weights, V)  # [B, H]
 
                 fused_views[name_A].append(fused)
 
         final_views = {}
         for name in self.view_names:
             # [B, num_views, H] -> mean over views
-            all_fusions = torch.stack(fused_views[name], dim=1)
+            all_fusions = torch.stack(fused_views[name], dim=1)  # [B, num_views, H]
             final_views[name] = torch.mean(all_fusions, dim=1)
 
         return final_views
@@ -148,7 +141,6 @@ class DrugInteractionModel(nn.Module):
         fused_B = self.cross_attention(encoded_B, encoded_A)
 
         view_names = list(self.view_dims.keys())
-
         combined_A = torch.cat([fused_A[n] for n in view_names], dim=1)  # [B, H * V]
         combined_B = torch.cat([fused_B[n] for n in view_names], dim=1)
 
