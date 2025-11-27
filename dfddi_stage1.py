@@ -222,16 +222,24 @@ def run_5fold_cv(X, Y, feature_type, device, epochs=100):
         'accuracy': np.mean([r['accuracy'] for r in fold_results]),
         'f1': np.mean([r['f1'] for r in fold_results]),
         'auc_roc': np.mean([r['auc_roc'] for r in fold_results]),
-        'auprc': np.mean([r['auprc'] for r in fold_results])
+        'auprc': np.mean([r['auprc'] for r in fold_results]),
+        'accuracy_std': np.std([r['accuracy'] for r in fold_results]),
+        'f1_std': np.std([r['f1'] for r in fold_results]),
+        'auc_roc_std': np.std([r['auc_roc'] for r in fold_results]),
+        'auprc_std': np.std([r['auprc'] for r in fold_results]),
     }
     
     print("\n=== 5-Fold Cross Validation Summary ===")
-    print(f"Average Accuracy: {avg_metrics['accuracy']:.4f}")
-    print(f"Average F1: {avg_metrics['f1']:.4f}")
-    print(f"Average AUC-ROC: {avg_metrics['auc_roc']:.4f}")
-    print(f"Average AUPRC: {avg_metrics['auprc']:.4f}")
+    print(f"Average Accuracy: {avg_metrics['accuracy']:.4f} ± {avg_metrics['accuracy_std']:.4f}")
+    print(f"Average F1: {avg_metrics['f1']:.4f} ± {avg_metrics['f1_std']:.4f}")
+    print(f"Average AUC-ROC: {avg_metrics['auc_roc']:.4f} ± {avg_metrics['auc_roc_std']:.4f}")
+    print(f"Average AUPRC: {avg_metrics['auprc']:.4f} ± {avg_metrics['auprc_std']:.4f}")
+    
+    results_df = pd.DataFrame([avg_metrics])
+    results_df.to_csv(' File/5-Fold/Stage1_performance_results.csv', index=False)
     
     return avg_metrics
+
 
 # ===================== Main =====================
 if __name__ == "__main__":
@@ -291,7 +299,9 @@ if __name__ == "__main__":
             }
         else:
             return {feature: {'dim': dims_map[feature], 'start': 0}}
-
+    
+    print("\n=== Starting 5-Fold Cross Validation ===")
+    cv_results = run_5fold_cv(X, Y, args.feature, device, epochs=100)
 
     print("\n=== Training Final Model ===")
     train_loader = DataLoader(TensorDataset(X, Y), batch_size=32, shuffle=True)

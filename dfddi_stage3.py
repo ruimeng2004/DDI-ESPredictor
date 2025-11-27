@@ -170,9 +170,7 @@ def evaluate_model(model, test_loader, device, num_classes=3):
     return metrics, all_probs.numpy(), pred_labels
 
 
-# ===================== 5-Fold Cross Validation =====================
 def run_5fold_cv(X, Y, feature_type, device, epochs=100):
-
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_results = []
     
@@ -223,15 +221,25 @@ def run_5fold_cv(X, Y, feature_type, device, epochs=100):
         fold_results.append(metrics)
     
     avg_metrics = {}
+    std_metrics = {}
     for metric in fold_results[0].keys():
         values = [r[metric] for r in fold_results]
         avg_metrics[metric] = np.mean(values)
+        std_metrics[metric] = np.std(values)
     
     print("\n=== 5-Fold Cross Validation Summary ===")
     for metric, value in avg_metrics.items():
-        print(f"Average {metric}: {value:.4f}")
+        print(f"Average {metric}: {value:.4f} ± {std_metrics[metric]:.4f}")
+    
+    results_df = pd.DataFrame({
+        'Metric': list(avg_metrics.keys()),
+        'Average': list(avg_metrics.values()),
+        'Std Dev': list(std_metrics.values())
+    })
+    results_df.to_csv('File/5-Fold/Stage3_performance_results_5fold.csv', index=False)
     
     return avg_metrics
+
 
 # ===================== Main =====================
 if __name__ == "__main__":
@@ -271,8 +279,8 @@ if __name__ == "__main__":
     X = torch.tensor(X, dtype=torch.float32)
     Y = torch.tensor(Y, dtype=torch.long)
     
-    # print("\n=== Starting 5-Fold Cross Validation ===")
-    # cv_results = run_5fold_cv(X, Y, args.feature, device, epochs=100)
+    print("\n=== Starting 5-Fold Cross Validation ===")
+    cv_results = run_5fold_cv(X, Y, args.feature, device, epochs=100)
     
     print("\n=== Training Final Model on Entire Dataset ===")
     train_loader = DataLoader(TensorDataset(X, Y), batch_size=32, shuffle=True)
