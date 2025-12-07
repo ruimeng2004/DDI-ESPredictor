@@ -173,72 +173,112 @@ def evaluate_model(model, test_loader, device):
     return metrics
 
 def run_5fold_cv(X, Y, feature_type, device, epochs=100):
-
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_results = []
-    
-    input_dim = {
-        "bert": 300, "fingerprint": 1024, "3D": 128, 
-        "2D": 128, "1D": 128, "multi": 128 * 3 + 300
-    }[feature_type]
-    
+
+    # ✅ 统一维度定义：必须和 process_dataset() 输出一致
+    # 你主程序里 dims_map 写 fingerprint=512，这里也保持一致，避免 1024/512 打架
+    dims_map = {
+        "bert": 300,
+        "fingerprint": 512,
+        "3D": 128,
+        "2D": 128,
+        "1D": 128,
+        "multi": 128 * 3 + 300,
+        "1D+2D": 128 * 2,
+        "1D+3D": 128 * 2,
+        "1D+bert": 128 + 300,
+        "2D+3D": 128 * 2,
+        "2D+bert": 128 + 300,
+        "3D+bert": 128 + 300,
+        "1D+2D+3D": 128 * 3,
+        "1D+2D+bert": 128 * 2 + 300,
+        "1D+3D+bert": 128 * 2 + 300,
+        "2D+3D+bert": 128 * 2 + 300
+    }
+
+    def build_feature_config(feature: str) -> dict:
+        if feature == "multi":
+            return {
+                '1D':   {'dim': 128, 'start': 0},
+                '2D':   {'dim': 128, 'start': 128},
+                '3D':   {'dim': 128, 'start': 256},
+                'bert': {'dim': 300, 'start': 384},
+            }
+        return {feature: {'dim': dims_map[feature], 'start': 0}}
+
+    feature_config = build_feature_config(feature_type)
+
+    expected_dim = sum(v['dim'] for v in feature_config.values())
+    actual_dim = X.shape[2]
+    assert actual_dim == expected_dim, \
+        f"[CV] Feature dim mismatch: expected {expected_dim}, got {actual_dim}. " \
+        f"feature_type={feature_type}. please check process_dataset output_dim and dims_map/build_feature_config."
+
     for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
-        print(f"\n=== Fold {fold+1}/5 ===")
-        
+        print(f"\n=== Fold {fold + 1}/5 ===")
+
         X_train_fold, X_val_fold = X[train_idx], X[val_idx]
         Y_train_fold, Y_val_fold = Y[train_idx], Y[val_idx]
-        
-        train_loader = DataLoader(TensorDataset(X_train_fold, Y_train_fold), 
-                                 batch_size=32, shuffle=True)
-        val_loader = DataLoader(TensorDataset(X_val_fold, Y_val_fold), 
-                               batch_size=32, shuffle=False)
-        
+
+        train_loader = DataLoader(
+            TensorDataset(X_train_fold, Y_train_fold),
+            batch_size=32, shuffle=True
+        )
+        val_loader = DataLoader(
+            TensorDataset(X_val_fold, Y_val_fold),
+            batch_size=32, shuffle=False
+        )
+
         model = DrugInteractionModel(
-            input_dim=input_dim, 
-            hidden_dim=64,  
+            feature_config=feature_config,
+            hidden_dim=64,
             num_classes=2,
             temperature=0.5
         ).to(device)
-        
+
         criterion = nn.CrossEntropyLoss().to(device)
         margin_criterion = model.margin_loss
         optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-        
+
         print(f"Training on {len(train_idx)} samples...")
         train_model(model, train_loader, optimizer, criterion, margin_criterion, device, epochs=epochs)
-        
+
         print(f"Evaluating on {len(val_idx)} samples...")
         metrics = evaluate_model(model, val_loader, device)
-        
-        print(f"Fold {fold+1} Results:")
+
+        print(f"Fold {fold + 1} Results:")
         print(f"Accuracy={metrics['accuracy']:.4f}")
         print(f"F1={metrics['f1']:.4f}")
         print(f"AUC-ROC={metrics['auc_roc']:.4f}")
         print(f"AUPRC={metrics['auprc']:.4f}")
-        
+
         fold_results.append(metrics)
-    
+
     avg_metrics = {
-        'accuracy': np.mean([r['accuracy'] for r in fold_results]),
-        'f1': np.mean([r['f1'] for r in fold_results]),
-        'auc_roc': np.mean([r['auc_roc'] for r in fold_results]),
-        'auprc': np.mean([r['auprc'] for r in fold_results]),
-        'accuracy_std': np.std([r['accuracy'] for r in fold_results]),
-        'f1_std': np.std([r['f1'] for r in fold_results]),
-        'auc_roc_std': np.std([r['auc_roc'] for r in fold_results]),
-        'auprc_std': np.std([r['auprc'] for r in fold_results]),
+        'accuracy': float(np.mean([r['accuracy'] for r in fold_results])),
+        'f1': float(np.mean([r['f1'] for r in fold_results])),
+        'auc_roc': float(np.mean([r['auc_roc'] for r in fold_results])),
+        'auprc': float(np.mean([r['auprc'] for r in fold_results])),
+        'accuracy_std': float(np.std([r['accuracy'] for r in fold_results])),
+        'f1_std': float(np.std([r['f1'] for r in fold_results])),
+        'auc_roc_std': float(np.std([r['auc_roc'] for r in fold_results])),
+        'auprc_std': float(np.std([r['auprc'] for r in fold_results])),
     }
-    
+
     print("\n=== 5-Fold Cross Validation Summary ===")
     print(f"Average Accuracy: {avg_metrics['accuracy']:.4f} ± {avg_metrics['accuracy_std']:.4f}")
     print(f"Average F1: {avg_metrics['f1']:.4f} ± {avg_metrics['f1_std']:.4f}")
     print(f"Average AUC-ROC: {avg_metrics['auc_roc']:.4f} ± {avg_metrics['auc_roc_std']:.4f}")
     print(f"Average AUPRC: {avg_metrics['auprc']:.4f} ± {avg_metrics['auprc_std']:.4f}")
-    
+
+    results_path = 'File/5-Fold/Stage1_performance_results.csv'
     results_df = pd.DataFrame([avg_metrics])
-    results_df.to_csv(' File/5-Fold/Stage1_performance_results.csv', index=False)
-    
+    results_df.to_csv(results_path, index=False)
+    print(f"\nSaved CV results to: {results_path}")
+
     return avg_metrics
+
 
 
 # ===================== Main =====================
