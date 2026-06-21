@@ -63,6 +63,17 @@ class DrugInteractionModel(nn.Module):
         self.feature_config = feature_config
         self.view_dims = {k: v['dim'] for k, v in feature_config.items()}
 
+        self.bert_cnn = None
+        if 'bert' in self.view_dims:
+            self.bert_cnn = nn.Sequential(
+                nn.Conv1d(1, 8, kernel_size=7, padding=3),
+                nn.ReLU(),
+                nn.Conv1d(8, 4, kernel_size=5, padding=2),
+                nn.ReLU(),
+                nn.Conv1d(4, 1, kernel_size=3, padding=1),
+                nn.ReLU(),
+            )
+
         self.view_encoders = nn.ModuleDict({
             name: nn.Sequential(
                 nn.Linear(cfg['dim'], hidden_dim),
@@ -110,6 +121,14 @@ class DrugInteractionModel(nn.Module):
             for name, cfg in self.feature_config.items()
         }
 
+    def _preprocess_view(self, name, view_tensor):
+        """Apply optional preprocessing (e.g., CNN) for specific feature views."""
+        if name == 'bert' and self.bert_cnn is not None:
+            # view_tensor: [B, 1, dim] -> CNN -> [B, 1, dim] -> flatten to [B, dim]
+            return self.bert_cnn(view_tensor).squeeze(1)
+
+        return view_tensor.squeeze(1)
+
     # -------- public forward -------- #
     def forward(self, drug1, drug2, return_logits=False):
         probs, v, logits = self._forward(drug1, drug2)
@@ -124,20 +143,20 @@ class DrugInteractionModel(nn.Module):
         drug2_views = self.split_features(drug2.unsqueeze(1))
 
         encoded_A = {
-            k: self.view_encoders[k](v.squeeze(1))
+            k: self.view_encoders[k](self._preprocess_view(k, v))
             for k, v in drug1_views.items()
         }  # [B, H]
         encoded_B = {
-            k: self.view_encoders[k](v.squeeze(1))
+            k: self.view_encoders[k](self._preprocess_view(k, v))
             for k, v in drug2_views.items()
         }
 
         projected_A = {
-            k: self.view_projections[k](v.squeeze(1))
+            k: self.view_projections[k](self._preprocess_view(k, v))
             for k, v in drug1_views.items()
         }  # [B, 64]
         projected_B = {
-            k: self.view_projections[k](v.squeeze(1))
+            k: self.view_projections[k](self._preprocess_view(k, v))
             for k, v in drug2_views.items()
         }
 
